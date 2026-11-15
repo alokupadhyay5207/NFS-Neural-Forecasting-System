@@ -1,0 +1,32 @@
+# Render Blueprint for the NFS FastAPI backend. In Render: New -> Blueprint -> pick this repository.
+# Secrets are declared with sync:false so you enter them in the dashboard (they are never stored in git).
+services:
+  - type: web
+    name: nfs-api
+    runtime: python
+    rootDir: backend
+    plan: starter            # the model + pandas need more than the 512 MB free tier comfortably offers
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: NFS_PROTECT_LEGACY_API
+        value: "true"
+      - key: NFS_CORS_ORIGINS
+        sync: false          # e.g. https://your-nfs.vercel.app
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: NFS_LLM_PROVIDER
+        sync: false
+      - key: NFS_LLM_API_KEY
+        sync: false
+      - key: NFS_LLM_MODEL
+        sync: false

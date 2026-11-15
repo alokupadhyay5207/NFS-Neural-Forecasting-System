@@ -1,0 +1,17 @@
+import React from "react";
+const chart = (n) => ({ children, data }) => React.createElement("div", { "data-chart": n, "data-points": data ? data.length : 0 }, children);
+const leaf = () => () => null;
+export const Bar = leaf();
+export const BarChart = chart("BarChart");
+export const CartesianGrid = leaf();
+export const Cell = leaf();
+export const ComposedChart = chart("ComposedChart");
+export const Legend = leaf();
+export const Line = leaf();
+export const Pie = leaf();
+export const PieChart = chart("PieChart");
+export const ReferenceLine = leaf();
+export const ResponsiveContainer = ({ children }) => React.createElement("div", { "data-chart": "container" }, children);
+export const Tooltip = leaf();
+export const XAxis = leaf();
+export const YAxis = leaf();

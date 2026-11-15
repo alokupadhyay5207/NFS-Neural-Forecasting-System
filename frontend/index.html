@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NFS — Customer Churn Prediction &amp; Analytics</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prop-types@15.8.1/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-is@18.3.1/umd/react-is.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide-react@0.383.0/dist/umd/lucide-react.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js"></script>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:#f4f6fb;color:#1e293b;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+</style>
+</head>
+<body>
+<div id="root"><div style="padding:40px">Loading NFS…</div></div>
+<script id="src" type="text/plain">
+
+const { useState, useMemo, useEffect } = React as any;
+const R = (window as any).Recharts;
+const { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, LineChart, Line, Legend } = R;
+const LI = (window as any).lucideReact || (window as any).LucideReact || {};
+
+type Contract = "Month-to-month" | "One year" | "Two year";
+type Internet = "Fiber" | "DSL" | "None";
+interface Profile { tenure: number; monthly: number; contract: Contract; internet: Internet; support: boolean; tickets: number }
+interface Row extends Profile { id: string; name: string; p: number; churned: boolean }
+
+const CONTRACTS: Contract[] = ["Month-to-month", "One year", "Two year"];
+const INTERNETS: Internet[] = ["Fiber", "DSL", "None"];
+const cx = (...a: any[]) => a.filter(Boolean).join(" ");
+const pct = (p: number) => (p * 100).toFixed(1) + "%";
+const Ic = ({ n, size = 18, className = "" }: any) => { const C = LI[n]; return C ? <C size={size} className={className} /> : <span style={{ display: "inline-block", width: size }} />; };
+
+// DEMO ONLY: a hand-written rule formula (logistic-style). It is NOT a trained machine-learning model.
+function score(c: Profile) {
+  const f: [string, number][] = [
+    ["Contract: " + c.contract, c.contract === "Month-to-month" ? 1.4 : c.contract === "One year" ? 0.2 : -0.9],
+    ["Tenure: " + c.tenure + " months", c.tenure < 12 ? 0.9 : c.tenure < 36 ? 0.1 : -0.7],
+    ["Monthly charge: $" + c.monthly, c.monthly > 85 ? 0.5 : c.monthly < 45 ? -0.3 : 0],
+    ["Internet: " + c.internet, c.internet === "Fiber" ? 0.4 : c.internet === "None" ? -0.4 : 0],
+    [c.support ? "Has tech support" : "No tech support", c.support ? -0.4 : 0.4],
+    ["Support tickets: " + c.tickets, Math.min(c.tickets, 6) * 0.15],
+  ];
+  const z = -1.5 + f.reduce((a, x) => a + x[1], 0);
+  return { p: 1 / (1 + Math.exp(-z)), f };
+}
+const level = (p: number) => (p >= 0.6 ? "High" : p >= 0.35 ? "Medium" : "Low");
+const LC: any = { High: "#e11d48", Medium: "#f59e0b", Low: "#10b981" };
+
+const FN = ["Aarav", "Diya", "Kabir", "Meera", "Rohan", "Ananya", "Vikram", "Isha", "Arjun", "Neha", "Sameer", "Priya", "Dev", "Tara", "Kunal"];
+const LN = ["Sharma", "Verma", "Iyer", "Singh", "Patel", "Nair", "Gupta", "Rao", "Mehta", "Das"];
+function makeData(): Row[] {
+  let s = 20260;
+  const r = () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  return Array.from({ length: 150 }, (_, i) => {
+    const k = r(), q = r();
+    const contract: Contract = k < 0.55 ? "Month-to-month" : k < 0.8 ? "One year" : "Two year";
+    const internet: Internet = q < 0.45 ? "Fiber" : q < 0.85 ? "DSL" : "None";
+    const tenure = Math.floor(r() * r() * 72) + 1;
+    const monthly = Math.round(20 + (internet === "Fiber" ? 50 : internet === "DSL" ? 25 : 0) + r() * 45);
+    const base: Profile = { tenure, monthly, contract, internet, support: r() < 0.4, tickets: Math.floor(r() * r() * 7) };
+    return { id: "C-" + (1001 + i), name: FN[Math.floor(r() * FN.length)] + " " + LN[Math.floor(r() * LN.length)], ...base, p: 0, churned: false };
+  });
+}
+let DATA = makeData();
+const TREND = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map((m, i) => ({ m, rate: [31, 29, 30, 27, 28, 26, 27, 25, 26, 24, 25, 23][i] }));
+
+// ---------- reusable components ----------
+const Card = ({ title, sub, right, children, className = "" }: any) => (
+  <section className={cx("bg-white rounded-2xl border border-slate-200 shadow-sm", className)}>
+    {title && <div className="flex items-start justify-between gap-3 px-5 pt-4"><div><h3 className="font-semibold text-slate-900">{title}</h3>{sub && <p className="text-xs text-slate-500 mt-0.5">{sub}</p>}</div>{right}</div>}
+    <div className="p-5">{children}</div>
+  </section>
+);
+const Banner = ({ children }: any) => <div className="flex gap-3 items-start rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-900"><Ic n="Info" className="mt-0.5 shrink-0" /><div>{children}</div></div>;
+const Tag = ({ children }: any) => <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full bg-violet-100 text-violet-700 px-2 py-0.5 whitespace-nowrap">{children}</span>;
+const RiskBadge = ({ p }: any) => { const l = level(p); const s: any = { High: "bg-rose-50 text-rose-700 ring-rose-200", Medium: "bg-amber-50 text-amber-700 ring-amber-200", Low: "bg-emerald-50 text-emerald-700 ring-emerald-200" }; return <span className={cx("inline-flex px-2 py-0.5 rounded-full text-xs font-medium ring-1", s[l])}>{l}</span>; };
+const Empty = ({ icon, title, text, action }: any) => <div className="text-center py-10 px-4"><div className="mx-auto w-12 h-12 rounded-full bg-slate-100 grid place-items-center text-slate-400 mb-3"><Ic n={icon} size={22} /></div><p className="font-medium text-slate-800">{title}</p><p className="text-sm text-slate-500 mt-1 max-w-sm mx-auto">{text}</p>{action && <div className="mt-4">{action}</div>}</div>;
+const Btn = ({ children, onClick, kind = "primary", disabled, className = "" }: any) => <button onClick={onClick} disabled={disabled} className={cx("inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed", kind === "primary" ? "text-white bg-gradient-to-r from-blue-600 to-violet-600 hover:opacity-90 shadow-sm" : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50", className)}>{children}</button>;
+const Sk = ({ h = "h-24" }: any) => <div className={cx("animate-pulse rounded-2xl bg-slate-200/70", h)} />;
+const Kpi = ({ label, value, icon, tone, note }: any) => <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex items-center gap-4"><div className={cx("w-11 h-11 rounded-xl grid place-items-center shrink-0", tone)}><Ic n={icon} size={22} /></div><div className="min-w-0"><p className="text-xs text-slate-500">{label}</p><p className="text-2xl font-bold text-slate-900 leading-tight">{value}</p>{note && <p className="text-xs text-slate-400">{note}</p>}</div></div>;
+const Chart = ({ children }: any) => <div className="h-64"><ResponsiveContainer width="100%" height="100%">{children}</ResponsiveContainer></div>;
+const Select = ({ label, value, onChange, options }: any) => <label className="text-xs text-slate-500 flex flex-col gap-1">{label}<select value={value} onChange={(e: any) => onChange(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-300">{options.map((o: string) => <option key={o}>{o}</option>)}</select></label>;
+const Field = ({ label, error, children }: any) => <label className="block text-sm font-medium text-slate-700">{label}<div className="mt-1">{children}</div>{error && <p className="text-xs text-rose-600 mt-1 font-normal">{error}</p>}</label>;
+const INP = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-violet-300";
+const TH = "text-left font-medium text-slate-500 px-4 py-2.5 text-xs uppercase tracking-wide whitespace-nowrap";
+const TD = "px-4 py-2.5 whitespace-nowrap";
+const Factors = ({ f }: any) => { const m = Math.max(...f.map((x: any) => Math.abs(x[1])), 0.1); return <ul className="space-y-2.5">{f.filter((x: any) => x[1] !== 0).sort((a: any, b: any) => Math.abs(b[1]) - Math.abs(a[1])).map((x: any) => <li key={x[0]} className="text-sm"><div className="flex justify-between gap-2"><span className="text-slate-700">{x[0]}</span><span className={x[1] > 0 ? "text-rose-600" : "text-emerald-600"}>{x[1] > 0 ? "raises" : "lowers"} risk</span></div><div className="h-1.5 rounded bg-slate-100 mt-1"><div className={cx("h-1.5 rounded", x[1] > 0 ? "bg-rose-400" : "bg-emerald-400")} style={{ width: (Math.abs(x[1]) / m) * 100 + "%" }} /></div></li>)}</ul>; };
+function useDelay(ms: number) { const [l, setL] = useState(true); useEffect(() => { const t = setTimeout(() => setL(false), ms); return () => clearTimeout(t); }, []); return l; }
+
+// ---------- 1. Dashboard ----------
+function Dashboard({ go, cohort, dataVersion }: any) {
+  const loading = useDelay(700);
+  const st = useMemo(() => {
+    const churned = DATA.filter((c) => c.churned).length;
+    const high = DATA.filter((c) => c.p >= 0.6).sort((a, b) => b.p - a.p);
+    const rate = (g: Row[]) => Math.round((100 * g.filter((c) => c.churned).length) / Math.max(g.length, 1));
+    return {
+      churned, high, mrr: high.reduce((a, c) => a + c.monthly, 0),
+      dist: ["Low", "Medium", "High"].map((l) => ({ name: l, value: DATA.filter((c) => level(c.p) === l).length })),
+      byContract: CONTRACTS.map((k) => ({ name: k, rate: rate(DATA.filter((c) => c.contract === k)) })),
+      byTenure: [["0–11 mo", 0, 11], ["12–35 mo", 12, 35], ["36–59 mo", 36, 59], ["60+ mo", 60, 999]].map((b: any) => ({ name: b[0], rate: rate(DATA.filter((c) => c.tenure >= b[1] && c.tenure <= b[2])) })),
+    };
+  }, [dataVersion]);
+  if (cohort.state !== "ok") return <Card title="Model-scored sample dashboard"><Empty icon={cohort.state === "loading" ? "Loader2" : "AlertTriangle"} title={cohort.state === "loading" ? "Scoring sample customers" : "Could not score sample customers"} text={cohort.state === "loading" ? "NFS is sending 150 synthetic customer profiles to your trained Random Forest through FastAPI." : cohort.error || "Check that the backend and trained model are running, then retry."} /></Card>;
+  if (loading) return <div className="space-y-4"><div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">{[0, 1, 2, 3].map((i) => <Sk key={i} />)}</div><div className="grid lg:grid-cols-3 gap-4"><Sk h="h-72" /><Sk h="h-72" /><Sk h="h-72" /></div></div>;
+  return (
+    <div className="space-y-5">
+      <Banner><b>Model-scored sample data.</b> These 150 customer profiles are synthetic, but their churn probabilities and risk bands come from your trained Random Forest via the FastAPI batch endpoint. They are not real customer records or observed churn outcomes.</Banner>
+      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <Kpi label="Total customers" value={DATA.length} icon="Users" tone="bg-blue-50 text-blue-600" note="synthetic sample" />
+        <Kpi label="Predicted churn rate" value={pct(st.churned / DATA.length)} icon="TrendingDown" tone="bg-violet-50 text-violet-600" note="model-predicted class at threshold" />
+        <Kpi label="High-risk customers" value={st.high.length} icon="AlertTriangle" tone="bg-rose-50 text-rose-600" note="model score ≥ 60%" />
+        <Kpi label="Monthly revenue at risk" value={"$" + st.mrr.toLocaleString()} icon="DollarSign" tone="bg-amber-50 text-amber-600" note="high-risk customers" />
+      </div>
+      <div className="grid lg:grid-cols-3 gap-5">
+        <Card title="Risk distribution" sub="Customers by Random Forest risk score"><Chart><PieChart><Pie data={st.dist} dataKey="value" nameKey="name" innerRadius={55} outerRadius={88} paddingAngle={3}>{st.dist.map((d: any) => <Cell key={d.name} fill={LC[d.name]} />)}</Pie><Tooltip /><Legend /></PieChart></Chart></Card>
+        <Card title="Churn rate by contract" sub="% predicted to churn by model"><Chart><BarChart data={st.byContract}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="name" fontSize={11} /><YAxis unit="%" fontSize={12} /><Tooltip /><Bar dataKey="rate" name="Churn rate %" fill="#6366f1" radius={[6, 6, 0, 0]} /></BarChart></Chart></Card>
+        <Card title="Churn rate by tenure" sub="% predicted to churn by tenure group"><Chart><BarChart data={st.byTenure}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="name" fontSize={11} /><YAxis unit="%" fontSize={12} /><Tooltip /><Bar dataKey="rate" name="Churn rate %" fill="#2563eb" radius={[6, 6, 0, 0]} /></BarChart></Chart></Card>
+      </div>
+      <div className="grid lg:grid-cols-3 gap-5">
+        <Card className="lg:col-span-2" title="Monthly churn trend" sub="Illustrative series; not calculated from this customer sample" right={<Tag>Illustration</Tag>}><Chart><LineChart data={TREND}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="m" fontSize={12} /><YAxis unit="%" fontSize={12} /><Tooltip /><Line type="monotone" dataKey="rate" name="Churn %" stroke="#7c3aed" strokeWidth={2.5} dot={false} /></LineChart></Chart></Card>
+        <Card title="Top high-risk customers" right={<Tag>Random Forest</Tag>}>
+          <ul className="divide-y divide-slate-100">{st.high.slice(0, 6).map((c) => <li key={c.id} className="flex items-center justify-between py-2 text-sm"><div><p className="font-medium text-slate-800">{c.name}</p><p className="text-xs text-slate-500">{c.contract} · {c.tenure} mo</p></div><span className="font-semibold text-rose-600">{pct(c.p)}</span></li>)}</ul>
+          <Btn kind="ghost" className="w-full mt-3" onClick={() => go("exp")}>Open Customer Explorer</Btn>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 2. Customer Explorer ----------
+function Explorer({ cohort, dataVersion }: any) {
+  const [q, setQ] = useState(""); const [ct, setCt] = useState("All"); const [rk, setRk] = useState("All"); const [sel, setSel] = useState(null); const [page, setPage] = useState(0);
+  const rows = useMemo(() => DATA.filter((c) => (ct === "All" || c.contract === ct) && (rk === "All" || level(c.p) === rk) && (c.name + c.id).toLowerCase().includes(q.toLowerCase())).sort((a, b) => b.p - a.p), [q, ct, rk, dataVersion]);
+  useEffect(() => setPage(0), [q, ct, rk]);
+  const pages = Math.max(1, Math.ceil(rows.length / 10));
+  const c: any = sel;
+  if (cohort.state !== "ok") return <Card title="Customer Explorer"><Empty icon="AlertTriangle" title="Model scores not ready" text={cohort.state === "loading" ? "Waiting for the Random Forest to score the sample profiles." : cohort.error || "Check the backend and retry."} /></Card>;
+  return (
+    <div className="space-y-5">
+      <Banner><b>Model-scored sample data.</b> Customer profiles are synthetic. Risk probabilities come from the trained Random Forest through FastAPI; the profiles do not represent actual customers.</Banner>
+      <div className="grid xl:grid-cols-3 gap-5">
+        <Card className="xl:col-span-2">
+          <div className="flex flex-wrap gap-3 items-end mb-4">
+            <label className="text-xs text-slate-500 flex flex-col gap-1 flex-1 min-w-[180px]">Search<div className="relative"><span className="absolute left-3 top-2.5 text-slate-400"><Ic n="Search" size={16} /></span><input value={q} onChange={(e: any) => setQ(e.target.value)} placeholder="Name or customer ID" className={cx(INP, "pl-9")} /></div></label>
+            <Select label="Contract" value={ct} onChange={setCt} options={["All", ...CONTRACTS]} />
+            <Select label="Risk level" value={rk} onChange={setRk} options={["All", "High", "Medium", "Low"]} />
+          </div>
+          {rows.length === 0 ? <Empty icon="Search" title="No customers match" text="Try a different name or clear the filters." action={<Btn kind="ghost" onClick={() => { setQ(""); setCt("All"); setRk("All"); }}>Clear filters</Btn>} /> : (
+            <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-slate-100"><th className={TH}>ID</th><th className={TH}>Customer</th><th className={TH}>Contract</th><th className={TH}>Tenure</th><th className={TH}>Monthly</th><th className={TH}>Risk</th></tr></thead>
+              <tbody>{rows.slice(page * 10, page * 10 + 10).map((r) => <tr key={r.id} onClick={() => setSel(r as any)} className={cx("border-b border-slate-50 cursor-pointer hover:bg-slate-50", c && c.id === r.id && "bg-violet-50")}><td className={cx(TD, "text-slate-500")}>{r.id}</td><td className={cx(TD, "font-medium")}>{r.name}</td><td className={TD}>{r.contract}</td><td className={TD}>{r.tenure} mo</td><td className={TD}>${r.monthly}</td><td className={TD}><RiskBadge p={r.p} /> <span className="text-xs text-slate-500 ml-1">{pct(r.p)}</span></td></tr>)}</tbody></table></div>
+          )}
+          <div className="flex items-center justify-between mt-4 text-sm text-slate-500"><span>{rows.length} customers</span><div className="flex items-center gap-2"><Btn kind="ghost" className="!px-3 !py-1.5" disabled={page === 0} onClick={() => setPage(page - 1)}>Prev</Btn><span>{page + 1} / {pages}</span><Btn kind="ghost" className="!px-3 !py-1.5" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>Next</Btn></div></div>
+        </Card>
+        <Card title="Customer details" right={c && <button onClick={() => setSel(null)} className="text-slate-400 hover:text-slate-700"><Ic n="X" /></button>}>
+          {!c ? <Empty icon="Users" title="No customer selected" text="Click a row to see profile details and the factors behind the demo score." /> : (
+            <div className="space-y-4">
+              <div><p className="text-lg font-semibold">{c.name}</p><p className="text-xs text-slate-500">{c.id} · {c.churned ? "Predicted to churn" : "Predicted to stay"}</p></div>
+              <div className="flex items-center gap-3"><span className="text-3xl font-bold" style={{ color: LC[level(c.p)] }}>{pct(c.p)}</span><RiskBadge p={c.p} /></div>
+              <dl className="grid grid-cols-2 gap-2 text-sm">{[["Contract", c.contract], ["Tenure", c.tenure + " months"], ["Monthly", "$" + c.monthly], ["Internet", c.internet], ["Tech support", c.support ? "Yes" : "No"], ["Tickets", c.tickets]].map((x) => <div key={x[0]} className="rounded-lg bg-slate-50 px-3 py-2"><dt className="text-xs text-slate-500">{x[0]}</dt><dd className="font-medium">{x[1]}</dd></div>)}</dl>
+              <div><p className="text-sm font-semibold mb-2">Model score</p><p className="text-xs text-slate-500">The batch API provides the churn probability and risk band. This cohort view does not calculate SHAP feature explanations.</p></div>
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ---------- API client (talks to the FastAPI backend) ----------
+const API_BASE = ""; // empty = the same address that served this page (http://127.0.0.1:8000)
+async function api(path: string, body?: any) {
+  let res: any;
+  try {
+    res = await fetch(API_BASE + "/api" + path, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch (e) {
+    throw { kind: "offline", message: "Cannot reach the NFS API. Start the backend (see README) and open http://127.0.0.1:8000 in your browser." };
+  }
+  let data: any = null;
+  try { data = await res.json(); } catch (e) { /* no JSON body */ }
+  if (!res.ok) {
+    const d = data && data.detail;
+    throw { kind: res.status === 422 ? "validation" : "server", status: res.status, detail: d,
+      message: typeof d === "string" ? d : res.status === 422 ? "Some fields are invalid. Please check the highlighted inputs." : "The server returned an error (" + res.status + ")." };
+  }
+  return data;
+}
+
+// Convert the dashboard's synthetic sample profiles into the full Telco feature schema,
+// then score them through the same trained FastAPI model used by Batch Prediction.
+function toModelCustomer(c: Row, i: number) {
+  const internet = c.internet === "Fiber" ? "Fiber optic" : c.internet === "DSL" ? "DSL" : "No";
+  const phone = i % 10 === 0 ? "No" : "Yes";
+  const yn = (n: number) => n % 2 === 0 ? "Yes" : "No";
+  const addon = (n: number) => internet === "No" ? "No internet service" : yn(i + n);
+  const total = c.tenure === 0 ? "" : (c.monthly * c.tenure).toFixed(2);
+  const payments = ["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"];
+  return {
+    customerID: c.id,
+    gender: i % 2 === 0 ? "Female" : "Male",
+    SeniorCitizen: i % 9 === 0 ? 1 : 0,
+    Partner: yn(i + 1),
+    Dependents: yn(i + 2),
+    tenure: c.tenure,
+    PhoneService: phone,
+    MultipleLines: phone === "No" ? "No phone service" : yn(i + 3),
+    InternetService: internet,
+    OnlineSecurity: addon(1),
+    OnlineBackup: addon(2),
+    DeviceProtection: addon(3),
+    TechSupport: internet === "No" ? "No internet service" : (c.support ? "Yes" : "No"),
+    StreamingTV: addon(4),
+    StreamingMovies: addon(5),
+    Contract: c.contract,
+    PaperlessBilling: yn(i + 4),
+    PaymentMethod: payments[i % payments.length],
+    MonthlyCharges: c.monthly,
+    TotalCharges: total
+  };
+}
+async function scoreDemoCohort() {
+  const profiles = makeData();
+  const customers = profiles.map((c, i) => toModelCustomer(c, i));
+  const [batch, metrics] = await Promise.all([
+    api("/predict/batch", { customers }),
+    api("/metrics")
+  ]);
+  if (!Array.isArray(batch.results) || batch.results.length !== profiles.length) {
+    throw new Error("The API did not return a prediction for every sample customer.");
+  }
+  const threshold = Number(metrics?.settings?.threshold ?? 0.5);
+  const failed = batch.results.filter((r: any) => r.status === "error");
+  if (failed.length) {
+    throw new Error("The model rejected " + failed.length + " sample row(s). Check the feature values and API schema.");
+  }
+  return profiles.map((c, i) => {
+    const result = batch.results[i];
+    const p = Number(result.churn_probability);
+    return { ...c, p, churned: typeof result.predicted_churn === "boolean" ? result.predicted_churn : p >= threshold, modelScored: true };
+  });
+}
+const LevelBadge = ({ lv }: any) => { const s: any = { High: "bg-rose-50 text-rose-700 ring-rose-200", Medium: "bg-amber-50 text-amber-700 ring-amber-200", Low: "bg-emerald-50 text-emerald-700 ring-emerald-200" }; return <span className={cx("inline-flex px-2 py-0.5 rounded-full text-xs font-medium ring-1", s[lv])}>{lv}</span>; };
+const ConnBanner = ({ conn, retry }: any) => conn.state === "ok" ? null : (
+  <div className="flex gap-3 items-start rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900"><Ic n="AlertTriangle" className="mt-0.5 shrink-0" /><div className="flex-1">{conn.state === "checking" ? "Connecting to the NFS API…" : conn.state === "no-model" ? "The API is running but the model could not be loaded: " + conn.error : conn.message}</div>{conn.state !== "checking" && <Btn kind="ghost" className="!py-1" onClick={retry}>Retry</Btn>}</div>
+);
+
+// ---------- 3. Predict Churn (live model) ----------
+const ADDONS = ["OnlineSecurity", "OnlineBackup", "DeviceProtection", "TechSupport", "StreamingTV", "StreamingMovies"];
+const GROUPS: any[] = [
+  ["Account & billing", ["tenure", "MonthlyCharges", "TotalCharges", "Contract", "PaperlessBilling", "PaymentMethod"]],
+  ["Phone & internet services", ["PhoneService", "MultipleLines", "InternetService", ...ADDONS]],
+  ["Customer profile", ["gender", "SeniorCitizen", "Partner", "Dependents"]],
+];
+const LABELS: any = { tenure: "Tenure (months)", MonthlyCharges: "Monthly charges ($)", TotalCharges: "Total charges ($) – optional", SeniorCitizen: "Senior citizen", PaperlessBilling: "Paperless billing", PaymentMethod: "Payment method", PhoneService: "Phone service", MultipleLines: "Multiple lines", InternetService: "Internet service", OnlineSecurity: "Online security", OnlineBackup: "Online backup", DeviceProtection: "Device protection", TechSupport: "Tech support", StreamingTV: "Streaming TV", StreamingMovies: "Streaming movies", Partner: "Has partner", Dependents: "Has dependents", Contract: "Contract", gender: "Gender" };
+const lab = (f: string) => LABELS[f] || f;
+const TYPICAL: any = { gender: "Female", SeniorCitizen: "0", Partner: "No", Dependents: "No", PhoneService: "Yes", MultipleLines: "No", InternetService: "Fiber optic", OnlineSecurity: "No", OnlineBackup: "No", DeviceProtection: "No", TechSupport: "No", StreamingTV: "No", StreamingMovies: "No", Contract: "Month-to-month", PaperlessBilling: "Yes", PaymentMethod: "Electronic check" };
+const EX_RISKY: any = { ...TYPICAL, tenure: "3", MonthlyCharges: "95.5", TotalCharges: "286.5", MultipleLines: "Yes", StreamingTV: "Yes", StreamingMovies: "Yes" };
+const EX_LOYAL: any = { gender: "Male", SeniorCitizen: "0", Partner: "Yes", Dependents: "Yes", PhoneService: "Yes", MultipleLines: "No", InternetService: "DSL", OnlineSecurity: "Yes", OnlineBackup: "Yes", DeviceProtection: "Yes", TechSupport: "Yes", StreamingTV: "No", StreamingMovies: "No", Contract: "Two year", PaperlessBilling: "No", PaymentMethod: "Bank transfer (automatic)", tenure: "60", MonthlyCharges: "55", TotalCharges: "3300" };
+const BLANK: any = { ...TYPICAL, tenure: "", MonthlyCharges: "", TotalCharges: "" };
+
+function Predict({ add, schema, conn, retry }: any) {
+  const [f, setF] = useState(BLANK); const [err, setErr] = useState({} as any); const [busy, setBusy] = useState(false); const [res, setRes] = useState(null); const [fail, setFail] = useState("");
+  const set = (k: string, v: any) => {
+    const n = { ...f, [k]: v };
+    if (k === "InternetService") ADDONS.forEach((a) => { if (v === "No") n[a] = "No internet service"; else if (n[a] === "No internet service") n[a] = "No"; });
+    if (k === "PhoneService") { if (v === "No") n.MultipleLines = "No phone service"; else if (n.MultipleLines === "No phone service") n.MultipleLines = "No"; }
+    setF(n);
+  };
+  const submit = async () => {
+    const e: any = {}; const t = Number(f.tenure), m = Number(f.MonthlyCharges), tc = f.TotalCharges === "" ? null : Number(f.TotalCharges);
+    if (f.tenure === "" || !Number.isInteger(t) || t < 0 || t > 120) e.tenure = "Enter whole months between 0 and 120.";
+    if (f.MonthlyCharges === "" || isNaN(m) || m <= 0) e.MonthlyCharges = "Enter a monthly charge above 0.";
+    if (tc !== null && (isNaN(tc) || tc < 0)) e.TotalCharges = "Enter 0 or more, or leave blank.";
+    setErr(e); setFail(""); setRes(null);
+    if (Object.keys(e).length) return;
+    setBusy(true);
+    try {
+      const out = await api("/predict", { ...f, SeniorCitizen: Number(f.SeniorCitizen), tenure: t, MonthlyCharges: m, TotalCharges: tc });
+      setRes(out);
+      add({ source: "Single", p: out.churn_probability, level: out.risk_level, label: f.Contract + " · " + t + " mo · $" + m + "/mo" });
+    } catch (x: any) {
+      if (x.kind === "validation" && Array.isArray(x.detail)) { const fe: any = {}; x.detail.forEach((d: any) => { fe[d.loc[d.loc.length - 1]] = d.msg; }); setErr(fe); setFail("The API rejected some fields."); }
+      else setFail(x.message);
+    }
+    setBusy(false);
+  };
+  const out: any = res;
+  const maxD = out ? Math.max(...out.drivers.map((d: any) => Math.abs(d.effect_points)), 1) : 1;
+  const control = (k: string) => {
+    if (["tenure", "MonthlyCharges", "TotalCharges"].includes(k)) return <input type="number" step="any" className={INP} value={f[k]} onChange={(e: any) => set(k, e.target.value)} placeholder={k === "tenure" ? "e.g. 8" : k === "MonthlyCharges" ? "e.g. 79.5" : "leave blank if new"} />;
+    const opts: any[] = k === "SeniorCitizen" ? [["0", "No"], ["1", "Yes"]] : schema.categorical_features[k].map((o: string) => [o, o]);
+    const locked = (ADDONS.includes(k) && f.InternetService === "No") || (k === "MultipleLines" && f.PhoneService === "No");
+    return <select className={cx(INP, locked && "bg-slate-50 text-slate-400")} disabled={locked} value={f[k]} onChange={(e: any) => set(k, e.target.value)}>{opts.map((o) => <option key={o[0]} value={o[0]}>{o[1]}</option>)}</select>;
+  };
+  return (
+    <div className="space-y-5">
+      <ConnBanner conn={conn} retry={retry} />
+      <Banner><b>Live prediction.</b> These results come from the trained Random Forest saved by your notebook, served by your local FastAPI backend. The model was trained on the IBM Telco <i>sample</i> dataset, so this is a portfolio demonstration, not a production churn system.</Banner>
+      {!schema ? <Card><Empty icon="Sparkles" title="Form unavailable" text="The form is built from the API’s feature schema. Connect to the API to continue." /></Card> : (
+      <div className="grid xl:grid-cols-5 gap-5">
+        <Card className="xl:col-span-3" title="Customer information" sub="All 19 fields the model was trained on"
+          right={<div className="flex gap-2"><Btn kind="ghost" className="!py-1 !px-2 text-xs" onClick={() => { setF(EX_RISKY); setErr({}); setRes(null); }}>Example: new customer</Btn><Btn kind="ghost" className="!py-1 !px-2 text-xs" onClick={() => { setF(EX_LOYAL); setErr({}); setRes(null); }}>Example: loyal customer</Btn></div>}>
+          {GROUPS.map((g: any) => <div key={g[0]} className="mb-5"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{g[0]}</p><div className="grid sm:grid-cols-2 gap-4">{g[1].map((k: string) => <Field key={k} label={lab(k)} error={err[k]}>{control(k)}</Field>)}</div></div>)}
+          <div className="flex gap-3"><Btn onClick={submit} disabled={busy || conn.state !== "ok"}>{busy ? <><span className="animate-spin"><Ic n="Loader2" /></span> Predicting…</> : <><Ic n="Sparkles" /> Predict churn risk</>}</Btn><Btn kind="ghost" onClick={() => { setF(BLANK); setErr({}); setRes(null); setFail(""); }}>Reset</Btn></div>
+        </Card>
+        <Card className="xl:col-span-2" title="Result" right={<Tag>Live model</Tag>}>
+          {busy ? <div className="space-y-3"><Sk h="h-16" /><Sk h="h-32" /></div>
+            : fail ? <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 flex gap-2"><Ic n="AlertTriangle" className="shrink-0 mt-0.5" />{fail}</div>
+            : !out ? <Empty icon="Sparkles" title="No prediction yet" text="Fill in the form (or load an example) and click “Predict churn risk”." />
+            : <div className="space-y-5">
+                <div><p className="text-xs text-slate-500">Predicted churn probability · {out.model.name}</p>
+                  <div className="flex items-center gap-3 mt-1"><span className="text-5xl font-bold" style={{ color: LC[out.risk_level] }}>{pct(out.churn_probability)}</span><LevelBadge lv={out.risk_level} /></div>
+                  <div className="h-2.5 rounded-full bg-slate-100 mt-3"><div className="h-2.5 rounded-full bg-gradient-to-r from-blue-500 to-violet-600" style={{ width: out.churn_probability * 100 + "%" }} /></div>
+                  <p className="text-sm text-slate-600 mt-2">The model predicts this customer <b>{out.predicted_churn ? "will churn" : "will stay"}</b> (threshold {pct(out.threshold)}). Risk bands: Medium from {pct(out.risk_bands.medium)}, High from {pct(out.risk_bands.high)}.</p></div>
+                {out.warnings.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 space-y-1">{out.warnings.map((w: string) => <p key={w}>⚠ {w}</p>)}</div>}
+                {out.drivers.length > 0 && <div><p className="text-sm font-semibold mb-2">Biggest levers for this customer</p>
+                  <ul className="space-y-2.5">{out.drivers.map((d: any) => <li key={d.feature} className="text-sm"><div className="flex justify-between gap-2"><span className="text-slate-700">{lab(d.feature)}: <b>{String(d.value)}</b></span><span className={d.effect_points > 0 ? "text-rose-600" : "text-emerald-600"}>{d.effect_points > 0 ? "+" : ""}{d.effect_points} pts</span></div><div className="h-1.5 rounded bg-slate-100 mt-1"><div className={cx("h-1.5 rounded", d.effect_points > 0 ? "bg-rose-400" : "bg-emerald-400")} style={{ width: (Math.abs(d.effect_points) / maxD) * 100 + "%" }} /></div></li>)}</ul>
+                  <p className="text-xs text-slate-400 mt-2">What-if sensitivity: how many percentage points the probability would move if that one field were swapped for the typical training value. It is not SHAP and does not prove cause.</p></div>}
+                <p className="text-xs text-slate-400">The model was trained with class_weight “{out.model.class_weight}”, so treat the percentage as a <b>risk score for ranking customers</b>, not an exact real-world likelihood.</p>
+              </div>}
+        </Card>
+      </div>)}
+    </div>
+  );
+}
+
+// ---------- 4. Batch Prediction (live model) ----------
+const COLS = ["customerID", "SeniorCitizen", "tenure", "MonthlyCharges", "TotalCharges", "gender", "Partner", "Dependents", "PhoneService", "MultipleLines", "InternetService", ...ADDONS, "Contract", "PaperlessBilling", "PaymentMethod"];
+const NOINET: any = { InternetService: "No", OnlineSecurity: "No internet service", OnlineBackup: "No internet service", DeviceProtection: "No internet service", TechSupport: "No internet service", StreamingTV: "No internet service", StreamingMovies: "No internet service" };
+const SAMPLE_ROWS: any[] = [
+  { customerID: "S-1", ...EX_RISKY }, { customerID: "S-2", ...EX_LOYAL },
+  { customerID: "S-3", ...TYPICAL, tenure: "14", MonthlyCharges: "78.9", TotalCharges: "1100", Contract: "One year", PaymentMethod: "Credit card (automatic)", TechSupport: "Yes" },
+  { customerID: "S-4", ...TYPICAL, ...NOINET, tenure: "30", MonthlyCharges: "20.25", TotalCharges: "600", Contract: "One year", PaperlessBilling: "No", PaymentMethod: "Mailed check" },
+  { customerID: "S-5", ...TYPICAL, tenure: "0", MonthlyCharges: "70", TotalCharges: "" },
+  { customerID: "S-6 (deliberately invalid)", ...TYPICAL, tenure: "5", MonthlyCharges: "60", TotalCharges: "300", Contract: "Weekly" },
+];
+const SAMPLE_CSV = [COLS.join(","), ...SAMPLE_ROWS.map((r: any) => COLS.map((c) => r[c] ?? "").join(","))].join("\n");
+function parseCsv(text: string) {
+  const rows: string[][] = []; let row: string[] = [], cell = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (ch === '"') q = false; else cell += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ",") { row.push(cell); cell = ""; }
+    else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cell); rows.push(row); row = []; cell = ""; }
+    else cell += ch;
+  }
+  if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+}
+function Batch({ add, schema, conn, retry }: any) {
+  const [name, setName] = useState(""); const [rows, setRows] = useState([] as any[]); const [err, setErr] = useState(""); const [out, setOut] = useState(null); const [busy, setBusy] = useState(false); const [drag, setDrag] = useState(false); const [show, setShow] = useState("All rows");
+  const handleText = (text: string, fname: string) => {
+    setOut(null); setErr(""); setRows([]); setName(fname);
+    if (!schema) { setErr("The API schema is not loaded yet. Connect to the API first."); return; }
+    const table = parseCsv(text);
+    if (table.length < 2) { setErr("The file is empty or has no data rows."); return; }
+    const map: any = {}; table[0].forEach((h, i) => { map[h.trim().toLowerCase()] = i; });
+    const missing = schema.feature_order.filter((c: string) => c !== "TotalCharges" && !(c.toLowerCase() in map));
+    if (missing.length) { setErr("Missing required column(s): " + missing.join(", ")); return; }
+    if (table.length - 1 > 10000) { setErr("This file has " + (table.length - 1) + " rows; the limit is 10,000 per upload."); return; }
+    const idIdx = ["customerid", "customer_id", "id"].map((k) => map[k]).find((v) => v !== undefined);
+    setRows(table.slice(1).map((r) => {
+      const o: any = {};
+      schema.feature_order.forEach((c: string) => { const i = map[c.toLowerCase()]; if (i !== undefined) o[c] = (r[i] ?? "").trim(); });
+      if (idIdx !== undefined) o.customerID = (r[idIdx] ?? "").trim();
+      return o;
+    }));
+  };
+  const onFile = (file: any) => {
+    if (!file) return;
+    if (!/\.csv$/i.test(file.name)) { setErr("Please upload a .csv file."); setRows([]); setOut(null); return; }
+    const rd = new FileReader(); rd.onload = () => handleText(String(rd.result), file.name); rd.onerror = () => setErr("Could not read that file."); rd.readAsText(file);
+  };
+  const run = async () => {
+    setBusy(true); setErr("");
+    try {
+      const res: any = await api("/predict/batch", { customers: rows });
+      setOut(res);
+      add({ source: "Batch", p: null, level: null, label: name + " · " + res.scored + " scored · " + res.summary.High + " high-risk" + (res.failed ? " · " + res.failed + " invalid" : "") });
+    } catch (x: any) { setErr(x.message); }
+    setBusy(false);
+  };
+  const res: any = out; const cols = rows[0] ? Object.keys(rows[0]) : [];
+  const shown = res ? res.results.filter((r: any) => show === "All rows" || (show === "High risk only" && r.risk_level === "High") || (show === "Invalid rows only" && r.status === "error")) : [];
+  return (
+    <div className="space-y-5">
+      <ConnBanner conn={conn} retry={retry} />
+      <Banner><b>Live batch scoring.</b> Your CSV is read in your browser and sent only to your own local API. Required columns (any order, any capitalisation): {schema ? schema.feature_order.filter((c: string) => c !== "TotalCharges").join(", ") : "…"}. <code>TotalCharges</code> and <code>customerID</code> are optional; other columns (like <code>Churn</code>) are ignored. The original Telco CSV works as-is.</Banner>
+      <Card title="1. Upload a CSV">
+        <div onDragOver={(e: any) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e: any) => { e.preventDefault(); setDrag(false); onFile(e.dataTransfer.files[0]); }} className={cx("rounded-xl border-2 border-dashed p-8 text-center transition", drag ? "border-violet-400 bg-violet-50" : "border-slate-200")}>
+          <div className="mx-auto w-11 h-11 rounded-full bg-blue-50 text-blue-600 grid place-items-center mb-2"><Ic n="Upload" size={20} /></div>
+          <p className="text-sm text-slate-700">Drag a .csv file here, or <label className="text-violet-600 font-medium cursor-pointer underline">browse<input type="file" accept=".csv,text/csv" className="hidden" onChange={(e: any) => { onFile(e.target.files[0]); e.target.value = ""; }} /></label></p>
+          <p className="text-xs text-slate-400 mt-1">or</p>
+          <Btn kind="ghost" className="mt-2" onClick={() => handleText(SAMPLE_CSV, "sample_customers.csv (hand-written examples)")}>Load sample CSV (6 hand-written customers)</Btn>
+        </div>
+        {err && <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800 flex gap-2"><Ic n="AlertTriangle" className="shrink-0 mt-0.5" />{err}</div>}
+      </Card>
+      {rows.length > 0 && <Card title="2. Preview" sub={name + " · " + rows.length + " rows (showing first 5)"} right={<Btn onClick={run} disabled={busy || conn.state !== "ok"}>{busy ? <><span className="animate-spin"><Ic n="Loader2" /></span> Scoring…</> : "Run predictions"}</Btn>}>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-slate-100">{cols.map((k) => <th key={k} className={TH}>{k}</th>)}</tr></thead><tbody>{rows.slice(0, 5).map((o: any, i: number) => <tr key={i} className="border-b border-slate-50">{cols.map((k) => <td key={k} className={TD}>{o[k]}</td>)}</tr>)}</tbody></table></div>
+      </Card>}
+      {busy && <Sk h="h-40" />}
+      {res && !busy && <>
+        <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <Kpi label="Scored" value={res.scored} icon="Check" tone="bg-blue-50 text-blue-600" note={res.failed ? res.failed + " invalid row(s)" : "all rows valid"} />
+          <Kpi label="High risk" value={res.summary.High} icon="AlertTriangle" tone="bg-rose-50 text-rose-600" />
+          <Kpi label="Medium risk" value={res.summary.Medium} icon="Gauge" tone="bg-amber-50 text-amber-600" />
+          <Kpi label="Low risk" value={res.summary.Low} icon="Target" tone="bg-emerald-50 text-emerald-600" />
+        </div>
+        <Card title="3. Results" sub={"Model: " + res.model.name + " · showing up to 200 rows"} right={<div className="flex items-center gap-2"><Tag>Live model</Tag><Select label="" value={show} onChange={setShow} options={["All rows", "High risk only", "Invalid rows only"]} /></div>}>
+          {shown.length === 0 ? <Empty icon="Search" title="Nothing to show" text="No rows match this filter." /> :
+          <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-slate-100"><th className={TH}>Row</th><th className={TH}>Customer</th><th className={TH}>Probability</th><th className={TH}>Risk</th><th className={TH}>Notes</th></tr></thead>
+            <tbody>{shown.slice(0, 200).map((r: any) => <tr key={r.row} className="border-b border-slate-50"><td className={cx(TD, "text-slate-500")}>{r.row}</td><td className={cx(TD, "font-medium")}>{r.id || "—"}</td>
+              {r.status === "error" ? <td className="px-4 py-2.5 text-rose-600 text-xs" colSpan={3}>Invalid: {r.errors.join("; ")}</td> : <><td className={TD}>{pct(r.churn_probability)}</td><td className={TD}><LevelBadge lv={r.risk_level} /></td><td className="px-4 py-2.5 text-xs text-amber-700">{r.warnings.join(" ")}</td></>}</tr>)}</tbody></table></div>}
+        </Card>
+      </>}
+      {!rows.length && !err && <Card><Empty icon="FileText" title="No data loaded" text="Upload a CSV or load the sample to preview rows and run live predictions." /></Card>}
+    </div>
+  );
+}
+
+// ---------- 5. Model Performance (real recorded metrics) ----------
+function Perf() {
+  const [m, setM] = useState(null as any); const [err, setErr] = useState(""); const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let alive = true; setM(null); setErr("");
+    api("/metrics").then((d: any) => { if (alive) setM(d); }).catch((e: any) => { if (alive) setErr(e.message); });
+    return () => { alive = false; };
+  }, [tick]);
+  if (err) return <Card><Empty icon="AlertTriangle" title="Could not load the model metrics" text={err} action={<Btn onClick={() => setTick(tick + 1)}>Try again</Btn>} /></Card>;
+  if (!m) return <div className="space-y-4"><div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">{[0, 1, 2, 3].map((i) => <Sk key={i} />)}</div><Sk h="h-72" /></div>;
+  const sel = m.selected_model, t = m.test_metrics[sel], d = m.dataset, s = m.settings, env = m.environment;
+  const names = Object.keys(m.test_metrics).filter((k) => !k.startsWith("Baseline"));
+  const base = m.test_metrics[Object.keys(m.test_metrics).find((k) => k.startsWith("Baseline")) as string];
+  const MET = [["accuracy", "Accuracy"], ["precision", "Precision"], ["recall", "Recall"], ["f1", "F1-score"], ["roc_auc", "ROC-AUC"]];
+  const chartData = MET.map((x) => { const o: any = { metric: x[1] }; names.forEach((n) => { o[n] = m.test_metrics[n][x[0]]; }); return o; });
+  const cell = (v: number, l: string, good: boolean) => <div className={cx("rounded-xl p-4 text-center", good ? "bg-blue-50 text-blue-800" : "bg-rose-50 text-rose-800")}><p className="text-2xl font-bold">{v}</p><p className="text-xs">{l}</p></div>;
+  return (
+    <div className="space-y-5">
+      <Banner><b>Real, recorded results.</b> These numbers were measured by your training notebook on a held-out test set of {d.test_rows.toLocaleString()} customers from the IBM Telco <i>sample</i> dataset (created {new Date(m.created_at_utc).toLocaleString()}). They describe this dataset only and are not a promise of real-world performance. The notebook did not save ROC-curve points, so only the ROC-AUC value is shown.</Banner>
+      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <Kpi label={"F1-score · " + sel} value={t.f1.toFixed(3)} icon="Target" tone="bg-blue-50 text-blue-600" note="test set" />
+        <Kpi label="ROC-AUC" value={t.roc_auc.toFixed(3)} icon="Activity" tone="bg-violet-50 text-violet-600" note="test set" />
+        <Kpi label="Precision / Recall" value={t.precision.toFixed(2) + " / " + t.recall.toFixed(2)} icon="Gauge" tone="bg-indigo-50 text-indigo-600" note={"threshold " + s.threshold} />
+        <Kpi label="Accuracy" value={pct(t.accuracy)} icon="Check" tone="bg-emerald-50 text-emerald-600" note={"baseline “always stay”: " + pct(base.accuracy)} />
+      </div>
+      <div className="grid lg:grid-cols-3 gap-5">
+        <Card title="Confusion matrix" sub={sel + " · " + (t.tn + t.fp + t.fn + t.tp).toLocaleString() + " test customers · threshold " + s.threshold}>
+          <div className="grid grid-cols-[auto_1fr_1fr] gap-2 items-center text-xs text-slate-500"><span /><span className="text-center">Predicted: stay</span><span className="text-center">Predicted: churn</span><span>Actual: stay</span>{cell(t.tn, "True negative", true)}{cell(t.fp, "False positive", false)}<span>Actual: churn</span>{cell(t.fn, "False negative", false)}{cell(t.tp, "True positive", true)}</div>
+        </Card>
+        <Card className="lg:col-span-2" title="Model comparison" sub="Test-set metrics for each candidate model"><Chart><BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="metric" fontSize={12} /><YAxis domain={[0, 1]} fontSize={11} /><Tooltip /><Legend />{names.map((n, i) => <Bar key={n} dataKey={n} fill={["#2563eb", "#7c3aed", "#0ea5e9"][i % 3]} radius={[4, 4, 0, 0]} />)}</BarChart></Chart></Card>
+      </div>
+      <div className="grid lg:grid-cols-2 gap-5">
+        <Card title="Cross-validation vs. test set" sub={s.cv_folds + "-fold CV on the training set (mean ± std) was used to choose the model"}>
+          <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-slate-100"><th className={TH}>Model</th><th className={TH}>CV F1</th><th className={TH}>CV ROC-AUC</th><th className={TH}>Test F1</th><th className={TH}>Test ROC-AUC</th></tr></thead>
+            <tbody>{names.map((n) => <tr key={n} className={cx("border-b border-slate-50", n === sel && "bg-violet-50")}><td className={cx(TD, "font-medium")}>{n}{n === sel && <span className="ml-2"><Tag>selected</Tag></span>}</td><td className={TD}>{m.cross_validation_mean[n].f1.toFixed(3)} ± {m.cross_validation_std[n].f1.toFixed(3)}</td><td className={TD}>{m.cross_validation_mean[n].roc_auc.toFixed(3)} ± {m.cross_validation_std[n].roc_auc.toFixed(3)}</td><td className={TD}>{m.test_metrics[n].f1.toFixed(3)}</td><td className={TD}>{m.test_metrics[n].roc_auc.toFixed(3)}</td></tr>)}</tbody></table></div>
+          <p className="text-xs text-slate-500 mt-3">The two models score very close to each other; differences this small are within the cross-validation spread.</p>
+        </Card>
+        <Card title="Training run details">
+          <dl className="grid grid-cols-2 gap-2 text-sm">{[["Customers (cleaned)", d.rows_after_cleaning.toLocaleString()], ["Train / test rows", d.train_rows.toLocaleString() + " / " + d.test_rows.toLocaleString()], ["Churn rate", pct(d.churn_rate_overall)], ["Threshold", s.threshold], ["Class weight", s.class_weight], ["Selected by", m.selection.metric + " (CV)"], ["Random state", s.random_state], ["scikit-learn", env.scikit_learn], ["Python / pandas", env.python + " / " + env.pandas]].map((x) => <div key={x[0]} className="rounded-lg bg-slate-50 px-3 py-2"><dt className="text-xs text-slate-500">{x[0]}</dt><dd className="font-medium break-words">{String(x[1])}</dd></div>)}</dl>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 6. Retention Insights ----------
+const SEG = [
+  { n: "New month-to-month customers", d: "Under 12 months, no contract commitment", t: (c: Row) => c.tenure < 12 && c.contract === "Month-to-month", a: ["Welcome call within the first 30 days", "Offer a small discount to move to a 1-year plan", "Send onboarding tips and a usage check-in"] },
+  { n: "High bill, no tech support", d: "Over $85/month without a support plan", t: (c: Row) => c.monthly > 85 && !c.support, a: ["Offer a free tech-support trial", "Run a plan review to find a better-fit price", "Proactively explain what is on the bill"] },
+  { n: "Frequent support contacts", d: "3 or more support tickets", t: (c: Row) => c.tickets >= 3, a: ["Escalate to a senior support agent", "Follow up after each ticket closes", "Offer a goodwill credit for repeat issues"] },
+  { n: "Loyal long-term customers", d: "3+ years on a 1- or 2-year contract", t: (c: Row) => c.tenure >= 36 && c.contract !== "Month-to-month", a: ["Loyalty rewards or early renewal perks", "Launch a referral programme", "Invite to a beta or feedback panel"] },
+];
+function Retention({ cohort, dataVersion }: any) {
+  const [i, setI] = useState(0);
+  const segs = useMemo(() => SEG.map((s) => { const m = DATA.filter(s.t); const act = m.filter((c) => !c.churned); return { ...s, m, act, avg: m.reduce((a, c) => a + c.p, 0) / Math.max(m.length, 1) }; }), [dataVersion]);
+  const s = segs[i];
+  if (cohort.state !== "ok") return <Card title="Retention Insights"><Empty icon="AlertTriangle" title="Model scores not ready" text={cohort.state === "loading" ? "Waiting for the Random Forest to score the sample profiles." : cohort.error || "Check the backend and retry."} /></Card>;
+  return (
+    <div className="space-y-5">
+      <Banner><b>Model-scored sample data.</b> Segment membership is based on sample profile fields and the displayed average risk comes from the trained Random Forest. Suggested actions are general retention ideas, not model-generated recommendations.</Banner>
+      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">{segs.map((g, k) => <button key={g.n} onClick={() => setI(k)} className={cx("text-left rounded-2xl border p-4 bg-white shadow-sm transition", k === i ? "border-violet-400 ring-2 ring-violet-200" : "border-slate-200 hover:border-slate-300")}><p className="font-semibold text-slate-900 text-sm">{g.n}</p><p className="text-xs text-slate-500 mt-0.5">{g.d}</p><div className="flex justify-between mt-3 text-sm"><span><b>{g.m.length}</b> <span className="text-slate-500">customers</span></span><span className="font-semibold" style={{ color: LC[level(g.avg)] }}>{pct(g.avg)} avg</span></div></button>)}</div>
+      <div className="grid lg:grid-cols-2 gap-5">
+        <Card title="Suggested retention actions" sub={s.n}><ul className="space-y-3">{s.a.map((x) => <li key={x} className="flex gap-3 text-sm text-slate-700"><span className="mt-0.5 w-5 h-5 rounded-full bg-violet-100 text-violet-600 grid place-items-center shrink-0"><Ic n="Check" size={12} /></span>{x}</li>)}</ul></Card>
+        <Card title="Customers predicted to stay" sub={s.act.length + " predicted to stay in this segment"}>
+          {s.act.length === 0 ? <Empty icon="Users" title="No active customers" text="No sample customers in this segment are currently predicted to stay." /> : <ul className="divide-y divide-slate-100">{[...s.act].sort((a, b) => b.p - a.p).slice(0, 5).map((c) => <li key={c.id} className="flex items-center justify-between py-2 text-sm"><div><p className="font-medium">{c.name}</p><p className="text-xs text-slate-500">{c.id} · ${c.monthly}/mo</p></div><span className="flex items-center gap-2"><RiskBadge p={c.p} /><span className="text-slate-500 text-xs">{pct(c.p)}</span></span></li>)}</ul>}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ---------- 7. Prediction History (saved in this browser) ----------
+const HKEY = "churniq.history.v1";
+function loadHistory(): any[] { try { const v = JSON.parse(localStorage.getItem(HKEY) || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
+function HistoryPage({ hist, clear, go }: any) {
+  return (
+    <div className="space-y-5">
+      <Banner>Every prediction you make on the Predict and Batch pages is listed here with a timestamp. The list is stored in <b>this browser only</b> (localStorage), because NFS does not have a database yet. Clearing your browser data removes it.</Banner>
+      <Card title="Prediction history" sub={hist.length + " entries"} right={hist.length > 0 && <Btn kind="ghost" className="!py-1.5" onClick={clear}>Clear all</Btn>}>
+        {hist.length === 0 ? <Empty icon="History" title="No predictions yet" text="Run a single or batch prediction and it will be listed here with a timestamp." action={<Btn onClick={() => go("pred")}>Make a prediction</Btn>} /> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-slate-100"><th className={TH}>Timestamp</th><th className={TH}>Source</th><th className={TH}>Details</th><th className={TH}>Probability</th><th className={TH}>Risk</th></tr></thead>
+            <tbody>{hist.map((h: any) => <tr key={h.id} className="border-b border-slate-50"><td className={cx(TD, "text-slate-500")}>{new Date(h.at).toLocaleString()}</td><td className={TD}>{h.source}</td><td className={TD}>{h.label}</td><td className={cx(TD, "font-medium")}>{h.p == null ? "—" : pct(h.p)}</td><td className={TD}>{h.level ? <LevelBadge lv={h.level} /> : "—"}</td></tr>)}</tbody></table></div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ---------- App shell ----------
+class Boundary extends React.Component<any, any> {
+  state = { e: null };
+  static getDerivedStateFromError(e: any) { return { e }; }
+  render() { return this.state.e ? <div className="p-6"><Card title="Something went wrong"><p className="text-sm text-slate-600">This page failed to render. Refresh to try again.</p></Card></div> : (this.props as any).children; }
+}
+const NAV = [["dash", "Dashboard", "LayoutDashboard"], ["exp", "Customer Explorer", "Users"], ["pred", "Predict Churn", "Sparkles"], ["batch", "Batch Prediction", "Upload"], ["perf", "Model Performance", "BarChart3"], ["ret", "Retention Insights", "Lightbulb"], ["hist", "Prediction History", "History"]];
+function App() {
+  const [page, setPage] = useState("dash"); const [open, setOpen] = useState(false); const [hist, setHist] = useState(loadHistory());
+  const [conn, setConn] = useState({ state: "checking" } as any); const [schema, setSchema] = useState(null as any);
+  const [cohort, setCohort] = useState({ state: "loading", error: "" } as any);
+  const [dataVersion, setDataVersion] = useState(0);
+  const connect = () => {
+    setConn({ state: "checking" });
+    setCohort({ state: "loading", error: "" });
+    Promise.all([api("/health"), api("/schema").catch(() => null)])
+      .then(async (r: any[]) => {
+        setSchema(r[1]);
+        if (!r[0].model_loaded) {
+          const message = r[0].error || "The trained model is not loaded.";
+          setConn({ state: "no-model", error: message });
+          setCohort({ state: "error", error: message });
+          return;
+        }
+        setConn({ state: "ok", health: r[0] });
+        try {
+          DATA = await scoreDemoCohort();
+          setDataVersion((v: number) => v + 1);
+          setCohort({ state: "ok", error: "" });
+        } catch (e: any) {
+          setCohort({ state: "error", error: e.message || "Batch scoring failed." });
+        }
+      })
+      .catch((e: any) => {
+        setConn({ state: "offline", message: e.message });
+        setCohort({ state: "error", error: e.message || "API offline." });
+      });
+  };
+  useEffect(() => { connect(); }, []);
+  useEffect(() => { try { localStorage.setItem(HKEY, JSON.stringify(hist.slice(0, 200))); } catch (e) { /* storage unavailable */ } }, [hist]);
+  const add = (entry: any) => setHist((h: any[]) => [{ ...entry, id: Date.now() + "-" + Math.random(), at: new Date().toISOString() }, ...h].slice(0, 200));
+  const go = (p: string) => { setPage(p); setOpen(false); window.scrollTo(0, 0); };
+  const cur = NAV.find((n) => n[0] === page) as string[];
+  const live = ["pred", "batch", "perf"].includes(page) || (["dash", "exp", "ret"].includes(page) && cohort.state === "ok");
+  const chip = conn.state === "ok" ? ["bg-emerald-500", "API connected"] : conn.state === "checking" ? ["bg-amber-400", "Connecting…"] : conn.state === "no-model" ? ["bg-amber-500", "Model not loaded"] : ["bg-rose-500", "API offline"];
+  const side = () => (
+    <div className="h-full flex flex-col bg-[#0b1530] text-slate-300">
+      <div className="flex items-center gap-3 px-5 py-5"><div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 grid place-items-center text-white"><Ic n="Activity" size={20} /></div><div><p className="text-white font-bold leading-tight">NFS</p><p className="text-[11px] text-slate-400">Churn analytics platform</p></div></div>
+      <nav className="px-3 space-y-1 flex-1 overflow-y-auto">{NAV.map((n) => <button key={n[0]} onClick={() => go(n[0])} className={cx("w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-left transition", page === n[0] ? "bg-gradient-to-r from-blue-600/30 to-violet-600/30 text-white ring-1 ring-white/10" : "hover:bg-white/5")}><Ic n={n[2]} size={18} />{n[1]}</button>)}</nav>
+      <div className="m-3 rounded-xl bg-white/5 p-3 text-xs text-slate-400"><p className="text-white font-medium mb-1">Live model scoring</p>Dashboard, Explorer and Retention score 150 synthetic profiles with your trained Random Forest. Predict, Batch and Model Performance also use the FastAPI backend.</div>
+    </div>
+  );
+  return (
+    <div className="min-h-screen">
+      <aside className="hidden lg:block fixed inset-y-0 left-0 w-64 z-30">{side()}</aside>
+      {open && <div className="lg:hidden fixed inset-0 z-40 flex"><div className="w-64">{side()}</div><div className="flex-1 bg-slate-900/50" onClick={() => setOpen(false)} /></div>}
+      <div className="lg:pl-64">
+        <header className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-slate-200 px-4 sm:px-8 py-3 flex items-center gap-3">
+          <button className="lg:hidden text-slate-600" onClick={() => setOpen(true)} aria-label="Open menu"><Ic n="Menu" size={22} /></button>
+          <h1 className="text-lg font-semibold text-slate-900 flex-1">{cur[1]}</h1>
+          <span className="hidden sm:flex items-center gap-1.5 text-xs text-slate-600"><span className={cx("w-2 h-2 rounded-full", chip[0])} />{chip[1]}</span>
+          <Tag>{live ? "Live model" : "Demo data"}</Tag>
+        </header>
+        <main className="px-4 sm:px-8 py-6 max-w-[1400px]">
+          <Boundary key={page}>
+            {page === "dash" && <Dashboard go={go} cohort={cohort} dataVersion={dataVersion} />}
+            {page === "exp" && <Explorer cohort={cohort} dataVersion={dataVersion} />}
+            {page === "pred" && <Predict add={add} schema={schema} conn={conn} retry={connect} />}
+            {page === "batch" && <Batch add={add} schema={schema} conn={conn} retry={connect} />}
+            {page === "perf" && <Perf />}
+            {page === "ret" && <Retention cohort={cohort} dataVersion={dataVersion} />}
+            {page === "hist" && <HistoryPage hist={hist} clear={() => setHist([])} go={go} />}
+          </Boundary>
+        </main>
+      </div>
+    </div>
+  );
+}
+(ReactDOM as any).createRoot(document.getElementById("root")).render(<App />);
+
+</script>
+<script>
+(function () {
+  var root = document.getElementById("root");
+  try {
+    var out = Babel.transform(document.getElementById("src").textContent, { filename: "app.tsx", presets: ["react", "typescript"] }).code;
+    var s = document.createElement("script");
+    s.textContent = out;
+    document.body.appendChild(s);
+  } catch (e) {
+    root.innerHTML = "<pre style='padding:24px;white-space:pre-wrap'>NFS failed to start: " + String(e) + "</pre>";
+  }
+})();
+</script>
+</body>
+</html>

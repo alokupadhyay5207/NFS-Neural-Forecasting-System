@@ -1,0 +1,99 @@
+{
+  "created_at_utc": "2026-10-24T12:03:51+00:00",
+  "selected_model": "Random Forest",
+  "selection": {
+    "metric": "f1",
+    "method": "5-fold stratified cross-validation on the training set"
+  },
+  "dataset": {
+    "file": "data/Telco-Customer-Churn.csv",
+    "reference_url": "https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv",
+    "rows_after_cleaning": 7043,
+    "train_rows": 5634,
+    "test_rows": 1409,
+    "churn_rate_overall": 0.2654,
+    "churn_rate_train": 0.2654,
+    "churn_rate_test": 0.2654
+  },
+  "settings": {
+    "random_state": 42,
+    "test_size": 0.2,
+    "threshold": 0.5,
+    "class_weight": "balanced",
+    "cv_folds": 5
+  },
+  "cross_validation_mean": {
+    "Logistic Regression": {
+      "accuracy": 0.7481,
+      "precision": 0.5165,
+      "recall": 0.8013,
+      "f1": 0.6279,
+      "roc_auc": 0.8459
+    },
+    "Random Forest": {
+      "accuracy": 0.7748,
+      "precision": 0.5582,
+      "recall": 0.7264,
+      "f1": 0.6311,
+      "roc_auc": 0.8451
+    }
+  },
+  "cross_validation_std": {
+    "Logistic Regression": {
+      "accuracy": 0.0153,
+      "precision": 0.0189,
+      "recall": 0.0379,
+      "f1": 0.0232,
+      "roc_auc": 0.0124
+    },
+    "Random Forest": {
+      "accuracy": 0.0091,
+      "precision": 0.0139,
+      "recall": 0.0274,
+      "f1": 0.0162,
+      "roc_auc": 0.0092
+    }
+  },
+  "test_metrics": {
+    "Logistic Regression": {
+      "accuracy": 0.7381,
+      "precision": 0.5043,
+      "recall": 0.7834,
+      "f1": 0.6136,
+      "roc_auc": 0.8413,
+      "tn": 747,
+      "fp": 288,
+      "fn": 81,
+      "tp": 293
+    },
+    "Random Forest": {
+      "accuracy": 0.7722,
+      "precision": 0.5533,
+      "recall": 0.7353,
+      "f1": 0.6315,
+      "roc_auc": 0.8417,
+      "tn": 813,
+      "fp": 222,
+      "fn": 99,
+      "tp": 275
+    },
+    "Baseline (always 'stay')": {
+      "accuracy": 0.7346,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "roc_auc": 0.5,
+      "tn": 1035,
+      "fp": 0,
+      "fn": 374,
+      "tp": 0
+    }
+  },
+  "environment": {
+    "python": "3.13.16",
+    "scikit_learn": "1.6.1",
+    "pandas": "2.2.3",
+    "numpy": "2.1.3",
+    "joblib": "1.6.0"
+  }
+}
