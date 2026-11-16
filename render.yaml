@@ -5,7 +5,7 @@ services:
     name: nfs-api
     runtime: python
     rootDir: backend
-    plan: starter            # the model + pandas need more than the 512 MB free tier comfortably offers
+    plan: free            # the model + pandas need more than the 512 MB free tier comfortably offers
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
